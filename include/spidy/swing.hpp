@@ -93,6 +93,23 @@ struct SwingConfig {
     //   body that had walked on back by all of that once it left the ground.
     bool physical = false;
     float bendOut = .06f, bendClearance = .35f, bendRope = .5f, handHeight = .6f, maxHandSpeed = 8;
+    // Swing assist: the feel of Insomniac's swing, over the rope's own physics.
+    // Off in the core, on in the game (game_swing::spiderManConfig).
+    // - A web in open air sticks assistAirRange out, not at maximum reach: a
+    //   100 m rope's arc was a free fall to the street.
+    // - A web that holds the body in the air winds in at assistReel to
+    //   assistRope at most, and short enough that the bottom of its arc clears
+    //   the ground below the body by assistClearance (never below
+    //   assistMinRope, and only from an anchor above the body).
+    // - Meanwhile gravity is assistGravity times its own (a heavier, faster
+    //   arc), and a taut rope below its anchor pushes the body along its way at
+    //   up to assistPush m/s^2, most at the bottom of the arc.
+    // - A grip let go in the air throws the body assistReleaseForward along
+    //   its way and assistReleaseUp up, unless it already falls faster than
+    //   assistReleaseFall.
+    bool assist = false;
+    float assistAirRange = 30, assistRope = 26, assistMinRope = 6, assistClearance = 3, assistReel = 14;
+    float assistGravity = 1.6f, assistPush = 9, assistReleaseForward = 4, assistReleaseUp = 5, assistReleaseFall = 4;
 };
 // The edges one web bends round at most (SwingConfig::physical).
 constexpr int maxBends = 6;

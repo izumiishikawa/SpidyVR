@@ -1782,6 +1782,102 @@ int main() {
                 check(e.kind != EventKind::Zip, "travel triggered zip");
         }
     });
+    test("swing assist sticks an open-air web at a swing's reach", [] {
+        TestWorld w;
+        w.anchor = {0, 500, 0}; // nothing in reach: open air
+        SwingConfig c;
+        c.assist = true;
+        Swing s(c);
+        s.update(.01f, aimed(), w);
+        check(s.webs()[0].attached && s.webs()[0].airAnchor, "no open-air web");
+        near(length(s.webs()[0].anchor - Vec3{0, 0, 0}), c.assistAirRange);
+    });
+    // A body 30 m up whose web holds 50 m away, up ahead, over a street at y 0.
+    struct Street : TestWorld {
+        std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+            if (auto hit = TestWorld::raycast(o, d, distance))
+                return hit;
+            if (d.y < -1e-4f && o.y > 0 && -o.y / d.y <= distance)
+                return RayHit{o + d * (-o.y / d.y), {0, 1, 0}, 2, true};
+            return {};
+        }
+        bool exists(std::uint64_t id) const override {
+            return id == 1 || id == 2;
+        }
+    };
+    const auto swingFromHigh = [](SwingConfig c, float seconds, float* lowest = nullptr, float* fastest = nullptr) {
+        Street w;
+        w.anchor = {0, 60, -40};
+        Swing s(c);
+        s.reset({{0, 30, 0}, {}, false});
+        Input in;
+        // Aimed from the body at the anchor: -Z turned 36.87 degrees up about X.
+        in.hands[0] = {{{0, 30, 0}, {.31622777f, 0, 0, .9486833f}}, {0, 0, 0}, true, 0, 1};
+        float low = 1e9f, fast = 0;
+        for (float t = 0; t < seconds; t += .01f) {
+            s.update(.01f, in, w);
+            low = std::min(low, s.body().position.y);
+            fast = std::max(fast, length(s.body().velocity));
+        }
+        if (lowest)
+            *lowest = low;
+        if (fastest)
+            *fastest = fast;
+        return s;
+    };
+    test("swing assist winds a long rope in so its arc clears the street", [&] {
+        SwingConfig c;
+        c.assist = true;
+        float lowest{};
+        const auto s = swingFromHigh(c, 3, &lowest);
+        check(s.webs()[0].attached, "web let go");
+        check(s.webs()[0].length <= c.assistRope + .01f, "rope not wound in to a swing's length");
+        check(lowest > c.assistClearance, "the arc reached the street");
+    });
+    test("swing assist swings faster than the bare rope", [&] {
+        SwingConfig bare, assisted;
+        assisted.assist = true;
+        float bareFastest{}, assistedFastest{};
+        swingFromHigh(bare, 2.5f, nullptr, &bareFastest);
+        swingFromHigh(assisted, 2.5f, nullptr, &assistedFastest);
+        check(assistedFastest > bareFastest * 1.2f, "no faster than the bare rope");
+    });
+    test("swing assist throws a body let go in the air on and up", [] {
+        TestWorld w;
+        SwingConfig c = inert();
+        c.assist = true;
+        Swing s(c);
+        s.reset({{0, 3, 0}, {10, 2, 0}, false});
+        auto in = aimed();
+        s.update(.01f, in, w);
+        check(s.webs()[0].attached, "no web");
+        const Vec3 before = s.body().velocity;
+        in.hands[0].grip = 0;
+        s.update(.01f, in, w);
+        check(!s.webs()[0].attached, "web kept");
+        check(s.body().velocity.y > before.y + c.assistReleaseUp - .5f, "not thrown up");
+        check(s.body().velocity.x > before.x + c.assistReleaseForward * .5f, "not thrown on");
+    });
+    test("the game's swing takes a deliberate pull to zip", [] {
+        // 18 cm at 1.5 m/s: an arm that shot a web, not a pull.
+        const auto zips = [](SwingConfig c) {
+            TestWorld w;
+            c.gravity = 0;
+            Swing s(c);
+            auto in = aimed();
+            s.update(.01f, in, w);
+            int count = 0;
+            for (int i = 0; i < 12; ++i) {
+                in.hands[0].gripRelativeToHead.y -= .015f;
+                s.update(.01f, in, w);
+                for (auto e : s.events())
+                    count += e.kind == EventKind::Zip;
+            }
+            return count;
+        };
+        check(zips(game_swing::physicsConfig({})) == 1, "the bare game swing zips at this");
+        check(zips(game_swing::spiderManConfig({})) == 0, "a casual arm zipped");
+    });
     test("reel requires trigger release after attachment", [] {
         TestWorld w;
         Swing s(inert());

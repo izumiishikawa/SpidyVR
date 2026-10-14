@@ -607,7 +607,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingStart(void* input) {
         if ((result = startMotion(&motion)))
             break;
         started = true;
-        solver = Swing(physicsConfig(config));
+        solver = Swing(spiderManConfig(config));
         QueryPerformanceFrequency(&frequency);
         deadline = config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
         game_grab::start(config.base, reinterpret_cast<game_grab::Call>(driveMotion),

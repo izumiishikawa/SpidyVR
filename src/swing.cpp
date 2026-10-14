@@ -68,6 +68,14 @@ Swing::Swing(SwingConfig c) : config_(c) {
         throw std::invalid_argument("Invalid wall mount");
     if (!std::isfinite(c.handHeight) || c.bendRope > c.minRope)
         throw std::invalid_argument("Invalid physical web");
+    const float assist[] = {c.assistAirRange, c.assistRope,    c.assistMinRope,         c.assistClearance,
+                            c.assistReel,     c.assistGravity, c.assistPush,            c.assistReleaseForward,
+                            c.assistReleaseUp, c.assistReleaseFall};
+    for (float v : assist)
+        if (!std::isfinite(v) || v < 0)
+            throw std::invalid_argument("Invalid swing assist");
+    if (c.assistMinRope < c.minRope || c.assistMinRope > c.assistRope || c.assistAirRange < c.minRope)
+        throw std::invalid_argument("Invalid swing assist rope");
 }
 void Swing::allowPhysical(bool allowed) {
     config_.physical = allowed;
@@ -576,7 +584,8 @@ WebShot Swing::shot(Pose aim, Vec3 from, const WorldQueries& world) const {
     const bool airAnchor = !out.hit && config_.airAnchors;
     if (!out.hit && !airAnchor)
         return out;
-    const RayHit anchor = airAnchor ? RayHit{aim.position + direction * config_.maxRange, {}, 0, true} : *out.hit;
+    const float airRange = config_.assist ? std::min(config_.assistAirRange, config_.maxRange) : config_.maxRange;
+    const RayHit anchor = airAnchor ? RayHit{aim.position + direction * airRange, {}, 0, true} : *out.hit;
     // Confirm the body has a clear line to the same anchor. Hands cannot
     // shoot through a wall while the body remains on its other side.
     if (anchor.fixed && (airAnchor || world.exists(anchor.surface)) && finite(anchor.point)) {
@@ -643,8 +652,18 @@ void Swing::inputs(float dt, const Input& in, const WorldQueries& world) {
         const bool held = s.held ? h.grip > .35f : h.grip > .65f;
         const bool shoot = held && !s.held;
         s.held = held;
-        if (w.attached && (!held || (!w.airAnchor && !world.exists(w.surface))))
+        if (w.attached && (!held || (!w.airAnchor && !world.exists(w.surface)))) {
+            // Let go in the air (swing assist): thrown on along the way, and up.
+            if (config_.assist && !held && !body_.grounded && !wall_.on &&
+                body_.velocity.y > -config_.assistReleaseFall) {
+                const Vec3 way = normalized(Vec3{body_.velocity.x, 0, body_.velocity.z});
+                if (length(way) > .5f)
+                    body_.velocity = limited(body_.velocity + way * config_.assistReleaseForward +
+                                                 Vec3{0, config_.assistReleaseUp, 0},
+                                             config_.maxSpeed);
+            }
             release(i);
+        }
         if (!w.attached && shoot) {
             if (const auto fired = shot(h.aim, body_.position, world); fired.web) {
                 w = *fired.web;
@@ -791,10 +810,12 @@ void Swing::step(float dt, const Input& in, const WorldQueries& world, const Wor
         // A native prediction has no sweep to cancel gravity at the floor. Keep
         // the measured support until a jump or rope pull actually lifts the body.
         const bool supported = !collision && body_.grounded && body_.velocity.y <= 0;
+        // Swing assist: a body a web holds in the air falls heavier into its arc.
+        const bool swinging = config_.assist && !body_.grounded && (webs_[0].attached || webs_[1].attached);
         if (supported)
             body_.velocity.y = 0;
         else
-            body_.velocity.y -= config_.gravity * dt;
+            body_.velocity.y -= config_.gravity * (swinging ? config_.assistGravity : 1.f) * dt;
         if (crest_ > 0) {
             // Over a wall's top edge: on over the roof behind it.
             crest_ -= dt;
@@ -836,6 +857,24 @@ void Swing::step(float dt, const Input& in, const WorldQueries& world, const Wor
     for (int i = 0; i < 2; ++i)
         if (webs_[i].attached && hands_[i].reeling)
             rates[i] = config_.reelSpeed;
+    // Swing assist: a long rope in the air winds in to a swing's length, short
+    // enough that the bottom of its arc clears the ground below the body.
+    if (config_.assist && !body_.grounded && !wall_.on && (webs_[0].attached || webs_[1].attached)) {
+        const auto ground = world.raycast(body_.position, {0, -1, 0}, 2 * config_.maxRange);
+        for (int i = 0; i < 2; ++i) {
+            if (!webs_[i].attached)
+                continue;
+            const Vec3 top = hold(i);
+            if (top.y <= body_.position.y)
+                continue; // an anchor below the body: no arc to shape
+            float wanted = config_.assistRope;
+            if (ground && finite(ground->point))
+                wanted = std::min(wanted, top.y - ground->point.y - config_.assistClearance);
+            wanted = std::max(wanted, config_.assistMinRope);
+            if (webs_[i].length > wanted)
+                rates[i] = std::max(rates[i], std::min(config_.assistReel, (webs_[i].length - wanted) / dt));
+        }
+    }
     const auto lengths = reeled(rates, dt);
     for (int i = 0; i < 2; ++i) {
         hands_[i].winch = (webs_[i].length - lengths[i]) / dt;
@@ -876,6 +915,22 @@ void Swing::step(float dt, const Input& in, const WorldQueries& world, const Wor
             pull[i] += change;
             body_.velocity -= radial * change;
         }
+    // Swing assist: the rope that holds the body hardest, taut below its
+    // anchor, pushes it on along its way, most at the bottom of the arc.
+    if (config_.assist && !wall_.on && !body_.grounded) {
+        int holding = -1;
+        for (int i = 0; i < 2; ++i)
+            if (webs_[i].attached && pull[i] > 0 && (holding < 0 || pull[i] > pull[holding]))
+                holding = i;
+        if (holding >= 0) {
+            const Vec3 radial = normalized(body_.position - ropes[holding].anchor);
+            const float below = -radial.y;
+            const Vec3 way = body_.velocity - radial * dot(body_.velocity, radial);
+            if (below > 0 && length(way) > 1)
+                body_.velocity =
+                    limited(body_.velocity + normalized(way) * (config_.assistPush * below * dt), config_.maxSpeed);
+        }
+    }
     // A web may pull along a wall or off it, never through it.
     if (wall_.on)
         holdWall(dt, wallBefore, collision);

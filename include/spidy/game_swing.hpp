@@ -36,6 +36,17 @@ inline SwingConfig physicsConfig(const Config& c) {
     physics.physical = true;
     return physics;
 }
+// The game's swing with the swing assist (SwingConfig::assist) on: the feel
+// of Spider-Man's own games. A zip takes a deliberate pull of the hand: the
+// arm that shot a web zipped 95 of 108 webs in an October 14 session, and the
+// zip's straight flight left the rope slack, so the player fell.
+inline SwingConfig spiderManConfig(const Config& c) {
+    SwingConfig physics = physicsConfig(c);
+    physics.assist = true;
+    physics.yankDistance = .3f;
+    physics.yankSpeed = 2.2f;
+    return physics;
+}
 // MoverStandard applies a velocity command during the physics step after the
 // one Spidy observes: the observed position starts the step already in flight,
 // and the observed velocity is the command before last. Steering from those
