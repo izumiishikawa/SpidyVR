@@ -181,6 +181,27 @@ def steam_executable(read=_registry_value):
     return next((path for path in candidates if path.is_file()),None)
 
 
+# A copy of the game outside Steam: its Spider-Man.exe, named in this file (one line), started directly.
+GAME_PATH_FILE=ROOT/'game-path.txt'
+GAME_PATH_GUESSES=(r'C:\games\Spider-man Remastered\Spider-Man.exe',)
+
+
+def direct_game_executable():
+    """Spider-Man.exe to start without Steam: game-path.txt (or SPIDY_GAME_EXE), else a known folder."""
+    candidates=[]
+    named=os.environ.get('SPIDY_GAME_EXE')
+    if named: candidates.append(named)
+    try: candidates.append(GAME_PATH_FILE.read_text(encoding='utf-8-sig').strip().strip('"'))
+    except OSError: pass
+    candidates.extend(GAME_PATH_GUESSES)
+    for value in candidates:
+        if not value: continue
+        path=pathlib.Path(value)
+        if path.is_dir(): path=path/'Spider-Man.exe'
+        if path.is_file(): return path
+    return None
+
+
 def ready_player(game):
     LIVE_VTABLES['hero_mover']=0x38b2c98
     candidates=game.registered_candidates()
@@ -230,9 +251,24 @@ def wait_for_game(timeout=180,prepare=None,early=None,ready=None):
     except RuntimeError as error:
         if not str(error).startswith('Spider-Man is not running.'): raise
         pid=None
-    if pid is None:
+    direct=direct_game_executable() if pid is None else None
+    if direct:
+        if prepare: prepare()
+        # Started by Spidy itself, the game is up in time for the larger render memory.
+        # RunAsInvoker: a "Run as administrator" compatibility flag on the executable would keep Spidy out.
+        environment=dict(os.environ,__COMPAT_LAYER='RunAsInvoker')
+        try: subprocess.Popen([str(direct),'-nolauncher'],cwd=str(direct.parent),env=environment)
+        except OSError as error:
+            # ERROR_ELEVATION_REQUIRED: the executable is set to run as administrator.
+            if getattr(error,'winerror',None)!=740: raise
+            raise NeedsAdministrator(GAME_AS_ADMINISTRATOR) from error
+        print(f'Starting Spider-Man from {direct} (without Steam). Select your save and Continue; VR will attach '
+              'automatically.' if ready is ready_player else f'Starting Spider-Man from {direct} (without Steam).',
+              flush=True)
+    elif pid is None:
         steam=steam_executable()
-        if not steam: raise RuntimeError('Steam was not found. Start Spider-Man and run this launcher again.')
+        if not steam: raise RuntimeError('Steam was not found. Put the path of Spider-Man.exe in game-path.txt in '
+                                         "Spidy's folder, or start Spider-Man and run this launcher again.")
         # Before anything is changed or started: an administrator's Steam starts an administrator's game.
         if not elevated() and any(elevated(process) for process in process_ids('steam.exe')):
             raise NeedsAdministrator(STEAM_AS_ADMINISTRATOR)

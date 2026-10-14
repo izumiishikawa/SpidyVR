@@ -6,3 +6,4 @@
 *.user
 __pycache__/
 /dist/
+/game-path.txt
