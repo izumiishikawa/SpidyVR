@@ -31,8 +31,13 @@
 #include "spidy/xr_session.hpp"
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -262,6 +267,52 @@ DWORD WINAPI SpidySetEyes(void*);
 float SpidyFlatAspect();
 }
 namespace {
+// aim.ini in Spidy's folder (game_tracking's WristAim), lines of `key = value`:
+// pitch and yaw in degrees, wrist_back_cm in centimetres. This module runs
+// from a copy in reports\<kind>-modules\<hash>\, below that folder.
+WristAim readWristAim() {
+    WristAim aim;
+    HMODULE self{};
+    wchar_t path[MAX_PATH]{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&readWristAim), &self))
+        return aim;
+    const DWORD length = GetModuleFileNameW(self, path, MAX_PATH);
+    if (!length || length >= MAX_PATH)
+        return aim;
+    std::error_code error;
+    auto folder = std::filesystem::path(path).parent_path();
+    for (int up = 0; up < 6 && folder.has_relative_path(); ++up, folder = folder.parent_path()) {
+        std::ifstream file(folder / L"aim.ini");
+        if (!file) {
+            if (std::filesystem::exists(folder / L"Spidy Launcher.exe", error))
+                break; // Spidy's folder, without the file
+            continue;
+        }
+        std::string line;
+        while (std::getline(file, line)) {
+            const auto equals = line.find('=');
+            if (line.empty() || line[0] == '#' || line[0] == ';' || equals == std::string::npos)
+                continue;
+            std::string key = line.substr(0, equals);
+            key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char c) { return std::isspace(c); }),
+                      key.end());
+            char* end{};
+            const std::string text = line.substr(equals + 1);
+            const float value = std::strtof(text.c_str(), &end);
+            if (end == text.c_str() || !std::isfinite(value))
+                continue;
+            if (key == "pitch" && std::abs(value) <= 90)
+                aim.pitch = value * 3.14159265f / 180;
+            else if (key == "yaw" && std::abs(value) <= 90)
+                aim.yaw = value * 3.14159265f / 180;
+            else if (key == "wrist_back_cm" && value >= -10 && value <= 30)
+                aim.wristBack = value / 100;
+        }
+        break;
+    }
+    return aim;
+}
 using BridgeCall = DWORD(WINAPI*)(void*);
 XrConfig config;
 BridgeCall submitInput{}, sampleBridge{}, stopBridge{}, retargetBridge{};
@@ -752,6 +803,9 @@ DWORD WINAPI run(void*) {
             rig.flipSpeed(static_cast<float>(values.flipSpeed) * 3.14159265f / 180);
             rig.triggerWebs(values.triggerWebs);
             rig.standOnWalls(values.standOnWalls);
+            // Read again with every change of the VR settings: an edit of
+            // aim.ini takes effect at the next one, the game left running.
+            rig.wristAim(readWristAim());
             native_hud::setSize(values.hud);
             if (swingStarted && swingSettings) {
                 game_swing::Settings s;

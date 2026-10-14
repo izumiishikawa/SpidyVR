@@ -200,7 +200,13 @@ Quat FlipMotion::update(const Sample& s) {
     }
     return tilt_;
 }
-Input trackedSwingInput(const XrFrame& f, const Rig& rig, bool triggerWebs) {
+Pose wristAim(const TrackedHand& h, unsigned hand, const WristAim& a) {
+    // Out is to the left for the left hand, to the right for the right.
+    const float out = hand == 0 ? a.yaw : -a.yaw;
+    const Quat way = unit(h.aim.orientation * Quat::yaw(out) * Quat::around({1, 0, 0}, a.pitch));
+    return {h.grip.position - way.rotate({0, 0, -1}) * a.wristBack, way};
+}
+Input trackedSwingInput(const XrFrame& f, const Rig& rig, bool triggerWebs, const WristAim& aim) {
     Input input;
     input.focused = f.focused && f.valid && validTrackedPose(f.head);
     if (!input.focused)
@@ -214,7 +220,7 @@ Input trackedSwingInput(const XrFrame& f, const Rig& rig, bool triggerWebs) {
         const float web = triggerWebs ? hand.trigger : hand.squeeze;
         const float reel = triggerWebs ? hand.squeeze : hand.trigger;
         if (handValid(hand))
-            input.hands[i] = {rig.toWorld(hand.aim), hand.grip.position - f.head.position, true,
+            input.hands[i] = {rig.toWorld(wristAim(hand, i, aim)), hand.grip.position - f.head.position, true,
                               std::clamp(reel, 0.f, 1.f), std::clamp(web, 0.f, 1.f)};
     }
     const auto& move = f.hands[0];
@@ -229,7 +235,9 @@ void GameTrackingRig::reset() {
     const float snap = snap_, smooth = smooth_;
     const bool flips = flips_, triggerWebs = triggerWebs_, standOnWalls = standOnWalls_;
     const FlipMotion flip = flip_;
+    const WristAim aim = wristAim_;
     *this = {};
+    wristAim_ = aim;
     snap_ = snap;
     smooth_ = smooth;
     flips_ = flips;
@@ -401,7 +409,7 @@ GameMotionFrame GameTrackingRig::update(const XrFrame& f, Vec3 feet, Vec3 gameFo
     pendingRecenter_ = buttonsChanged_ = false;
     out.predictedDisplayTime = f.predictedDisplayTime;
     out.anchor = feet;
-    out.swing = trackedSwingInput(f, placed, triggerWebs_);
+    out.swing = trackedSwingInput(f, placed, triggerWebs_, wristAim_);
     // The left stick turns the flip: the player does not walk or drift.
     if (flip_.steering())
         out.swing.move = {};

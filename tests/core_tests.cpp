@@ -515,16 +515,16 @@ int main() {
         check(out.swing.hands[0].tracked&&out.swing.hands[1].tracked,"hands not independent");
         near(out.swing.hands[0].gripRelativeToHead.y,-.5f);
     });
-    test("visible hand fingers agree with aim while wrist stays at grip position", [] {
+    test("visible hand fingers agree with aim, and webs leave its wrist", [] {
         GameTrackingRig rig; auto f=trackedFrame();
         f.hands[0].grip.orientation={.70710678f,0,0,.70710678f};
         f.hands[0].aim.orientation=Quat::yaw(.4f);
         rig.update(f,{10,20,30},{1,0,0},true);
         f.predictedDisplayTime=2;
         const auto out=rig.update(f,{10,20,30},{1,0,0},true);
-        near(length(out.hands[0].orientation.rotate({0,0,-1})-
-                    out.swing.hands[0].aim.orientation.rotate({0,0,-1})),0);
-        near(length(out.hands[0].position-out.swing.hands[0].aim.position),0);
+        const Vec3 way=out.swing.hands[0].aim.orientation.rotate({0,0,-1});
+        near(length(out.hands[0].orientation.rotate({0,0,-1})-way),0);
+        near(length(out.hands[0].position-way*WristAim{}.wristBack-out.swing.hands[0].aim.position),0);
     });
     test("native grounded prediction never requests gravity through support", [] {
         TestWorld world;world.enabled=false;Swing swing;
@@ -1781,6 +1781,23 @@ int main() {
             for (auto e : s.events())
                 check(e.kind != EventKind::Zip, "travel triggered zip");
         }
+    });
+    test("webs leave the wrist, turned as aim.ini says", [] {
+        TrackedHand h;
+        h.grip.position = {.2f, 1.2f, -.3f};
+        h.aim.orientation = {}; // pointing along -Z
+        const Vec3 ahead{0, 0, -1};
+        WristAim plain;
+        const Pose wrist = wristAim(h, 1, plain);
+        near(length(wrist.position - (h.grip.position - ahead * plain.wristBack)), 0);
+        near(dot(wrist.orientation.rotate(ahead), ahead), 1);
+        WristAim up;
+        up.pitch = 3.14159265f / 2;
+        near(wristAim(h, 1, up).orientation.rotate(ahead).y, 1);
+        WristAim out;
+        out.yaw = .5f;
+        check(wristAim(h, 0, out).orientation.rotate(ahead).x < -.4f, "the left hand's yaw is not to the left");
+        check(wristAim(h, 1, out).orientation.rotate(ahead).x > .4f, "the right hand's yaw is not to the right");
     });
     test("swing assist sticks an open-air web at a swing's reach", [] {
         TestWorld w;

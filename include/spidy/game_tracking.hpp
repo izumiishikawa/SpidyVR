@@ -7,9 +7,19 @@
 #include <cmath>
 
 namespace spidy {
+// Where a hand's webs leave it, and which way (Input's hand aim): from the
+// wrist, as a web shooter's, not from the controller's tip. The way is the
+// controller's pointing axis turned `pitch` radians up and `yaw` radians out,
+// away from the body; the wrist is wristBack metres behind the grip's centre
+// along it. aim.ini in Spidy's folder sets them, in degrees and centimetres.
+struct WristAim {
+    float pitch{}, yaw{}, wristBack = .08f;
+};
+// hand: 0 the left, 1 the right.
+Pose wristAim(const TrackedHand&, unsigned hand, const WristAim&);
 // triggerWebs: the controllers' triggers are the hands' web buttons (Input's
 // grip) and their grips the reels (Input's trigger), swapped from the default.
-Input trackedSwingInput(const XrFrame& frame, const Rig& rig, bool triggerWebs = false);
+Input trackedSwingInput(const XrFrame& frame, const Rig& rig, bool triggerWebs = false, const WristAim& aim = {});
 native_rays::Command controllerAimRays(const Input&, uint64_t serial);
 struct GameMotionFrame {
     bool active{}, releaseWebs = true;
@@ -212,6 +222,10 @@ class GameTrackingRig {
     void standOnWalls(bool on) {
         standOnWalls_ = on;
     }
+    // Where webs leave the hands (WristAim); reset() keeps it.
+    void wristAim(const WristAim& aim) {
+        wristAim_ = aim;
+    }
     void reset();
 
   private:
@@ -223,6 +237,7 @@ class GameTrackingRig {
     bool initialized_{}, wasActive_{}, turnHeld_{}, pendingRecenter_{}, onSurface_{}, flips_{};
     // The trigger webs, and the web button changed since the last frame of play.
     bool triggerWebs_{}, buttonsChanged_{};
+    WristAim wristAim_{};
     float snap_ = .5235988f, smooth_{};
     // The stand-off wanted along the surface's normal, and the time on it.
     float surfaceDepth_{}, surfaceSeconds_{};

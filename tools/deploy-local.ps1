@@ -54,4 +54,7 @@ foreach ($entry in $files.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath $source)) { throw "Missing $($entry.Value). Build first." }
     Copy-Item -LiteralPath $source -Destination (Join-Path $Target $entry.Key) -Force
 }
+# The web aim's settings (game_tracking's WristAim): the player's own once there.
+$aim = Join-Path $Target 'aim.ini'
+if (-not (Test-Path -LiteralPath $aim)) { Copy-Item -LiteralPath (Join-Path $root 'docs\aim.ini') -Destination $aim }
 Write-Output "Copied this build into $Target. Start 'Spidy Launcher.exe' there."
