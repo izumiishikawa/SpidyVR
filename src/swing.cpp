@@ -860,7 +860,9 @@ void Swing::step(float dt, const Input& in, const WorldQueries& world, const Wor
     // Swing assist: a long rope in the air winds in to a swing's length, short
     // enough that the bottom of its arc clears the ground below the body.
     if (config_.assist && !body_.grounded && !wall_.on && (webs_[0].attached || webs_[1].attached)) {
-        const auto ground = world.raycast(body_.position, {0, -1, 0}, 2 * config_.maxRange);
+        // No longer than a web's reach: the game's rays go 150 m at most, and
+        // a longer one stopped the swing (and VR with it) at the first web.
+        const auto ground = world.raycast(body_.position, {0, -1, 0}, config_.maxRange);
         for (int i = 0; i < 2; ++i) {
             if (!webs_[i].attached)
                 continue;

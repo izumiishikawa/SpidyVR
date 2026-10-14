@@ -1851,6 +1851,26 @@ int main() {
         check(s.webs()[0].length <= c.assistRope + .01f, "rope not wound in to a swing's length");
         check(lowest > c.assistClearance, "the arc reached the street");
     });
+    test("swing assist casts no ray longer than a web's reach", [] {
+        // The game refuses rays over 150 m, and a refused ray stops the swing.
+        struct Measured : Street {
+            mutable float longest{};
+            std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+                longest = std::max(longest, distance);
+                return Street::raycast(o, d, distance);
+            }
+        } w;
+        w.anchor = {0, 60, -40};
+        SwingConfig c = game_swing::spiderManConfig({});
+        Swing s(c);
+        s.reset({{0, 30, 0}, {}, false});
+        Input in;
+        in.hands[0] = {{{0, 30, 0}, {.31622777f, 0, 0, .9486833f}}, {0, 0, 0}, true, 0, 1};
+        for (int i = 0; i < 200; ++i)
+            s.predictNativeStep(.011f, in, w, s.body(), .011f);
+        check(w.longest > 0, "no ray cast");
+        check(w.longest <= c.maxRange + .01f, "a ray longer than a web's reach");
+    });
     test("swing assist swings faster than the bare rope", [&] {
         SwingConfig bare, assisted;
         assisted.assist = true;
