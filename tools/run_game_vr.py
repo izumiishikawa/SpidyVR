@@ -26,7 +26,7 @@ from probe_native_rays import snapshot as ray_snapshot
 from probe_game_swing import snapshot as swing_snapshot
 from probe_native_motion import snapshot as motion_snapshot
 from vr_launcher import (LauncherLock, alive, bring_to_front, wait_for_game, enlarge_render_memory, elevated,
-                         RENDER_MEMORY_HOOKS, NeedsAdministrator, NEEDS_ADMINISTRATOR_EXIT)
+                         enlarge_window, RENDER_MEMORY_HOOKS, NeedsAdministrator, NEEDS_ADMINISTRATOR_EXIT)
 import vr_display
 import xr_runtime
 
@@ -1671,6 +1671,14 @@ def session(a, startup):
     else:
         game = Game(find_game())
         render_memory_module(game.pid)
+    if render_module and not a.full_desktop_view:
+        # The HUD's panel at the window's size: the window grows past the desktop once the game has it.
+        def hud_window(pid=game.pid, height=vr_display.hud_height()):
+            size = enlarge_window(pid, height)
+            print(f'HUD in VR: drawn at {size[0]} x {size[1]} (the game window grows past the desktop; '
+                  'hud.ini sets its height).' if size else
+                  'WARNING: the game window could not grow for a sharper HUD in VR.', flush=True)
+        threading.Thread(target=hud_window, daemon=True).start()
     startup.fields['game_pid'] = game.pid
     startup.fields['steam_build'] = game.steam_build
     if not game.steam_build:

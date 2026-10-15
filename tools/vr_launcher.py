@@ -249,6 +249,35 @@ def enlarge_render_memory(pid,megabytes=RENDER_RING_MB,patience=2.5):
         return exports
 
 
+def enlarge_window(pid,height,patience=60):
+    """Make the game's window `height` rows (16:9), past the desktop's height (SpidyWindowSize), so the
+    HUD's panel in VR is drawn at that size; returns the client size asked for, or None.
+
+    The HUD's panel texture takes the window's size, and VR shows only its middle: from the 810-row window
+    of a 1080-row desktop the HUD was 1.5 times coarser than a Quest 3's eye (October 15). Windows keeps a
+    window within the desktop, which the render memory module lifts. The game has its window a few
+    seconds after it starts: asked for `patience` seconds.
+    """
+    width=round(height*16/9)
+    started=time.monotonic()
+    while time.monotonic()-started<patience:
+        process=open_process(0x0400|0x0010|0x0020|0x0008|0x0002,False,pid)
+        try:
+            if not process: raise c.WinError(c.get_last_error())
+            exports,_=load_module(pid,process,RENDER_MEMORY_DLL,ROOT/'reports/render-memory-modules',
+                                  ('SpidyWindowSize',))
+            code=call_remote(process,exports['SpidyWindowSize'],width|(height<<16))
+        except (OSError,RuntimeError,StopIteration) as error:
+            if 'Missing export' in str(error): return None
+            code=None
+        finally:
+            if process: close(process)
+        if code==0: return width,height
+        if code not in (None,7501): return None
+        time.sleep(.5)
+    return None
+
+
 def wait_for_game(timeout=180,prepare=None,early=None,ready=None):
     """`prepare` runs only when this launcher starts the game, before the game reads its settings.
 

@@ -198,6 +198,85 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRenderMemoryStop(void*) {
     ReleaseSRWLockExclusive(&lifecycle);
     return result;
 }
+namespace {
+// The game's window larger than the desktop (SpidyWindowSize). The HUD's panel
+// texture and its second movie take the window's size (native_hud.cpp), and
+// only the middle of the panel shows in VR: from a 1440 x 810 window (three
+// quarters of a 1080-row desktop) the HUD was 1.5 times coarser than a Quest
+// 3's eye. Windows holds a window within the desktop by the WM_GETMINMAXINFO
+// answer; the window's procedure here raises it to the size wanted. This
+// module stays loaded for the game's life, so the procedure does too.
+WNDPROC originalWindowProc{};
+HWND gameWindow{};
+std::atomic<LONG> largestWidth{}, largestHeight{};
+LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    const LRESULT result = CallWindowProcW(originalWindowProc, window, message, wParam, lParam);
+    if (message == WM_GETMINMAXINFO && lParam) {
+        auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+        info->ptMaxTrackSize.x = std::max(info->ptMaxTrackSize.x, largestWidth.load());
+        info->ptMaxTrackSize.y = std::max(info->ptMaxTrackSize.y, largestHeight.load());
+        info->ptMaxSize.x = std::max(info->ptMaxSize.x, largestWidth.load());
+        info->ptMaxSize.y = std::max(info->ptMaxSize.y, largestHeight.load());
+    }
+    return result;
+}
+BOOL CALLBACK findGameWindow(HWND window, LPARAM found) {
+    DWORD owner{};
+    GetWindowThreadProcessId(window, &owner);
+    if (owner == GetCurrentProcessId() && IsWindowVisible(window) && GetWindowTextLengthW(window) &&
+        !GetWindow(window, GW_OWNER)) {
+        *reinterpret_cast<HWND*>(found) = window;
+        return FALSE;
+    }
+    return TRUE;
+}
+} // namespace
+// `size`: the client area wanted, width in its low 16 bits and height in the
+// next 16. Returns 7501 while the game has no window yet (ask again), 0 once
+// the resize is on its way: the window's own thread makes it (asynchronously,
+// so a busy game cannot hold this call), and the game lays its HUD out anew.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyWindowSize(void* size) {
+    const auto packed = reinterpret_cast<uintptr_t>(size);
+    const LONG width = static_cast<LONG>(packed & 0xffff), height = static_cast<LONG>((packed >> 16) & 0xffff);
+    if (width < 640 || height < 360 || width > 8192 || height > 8192)
+        return 7500;
+    AcquireSRWLockExclusive(&lifecycle);
+    DWORD result{};
+    do {
+        HWND window{};
+        EnumWindows(findGameWindow, reinterpret_cast<LPARAM>(&window));
+        if (!window) {
+            result = 7501;
+            break;
+        }
+        const auto style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE));
+        const auto extended = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE));
+        RECT outer{0, 0, width, height};
+        if (!AdjustWindowRectEx(&outer, style, FALSE, extended)) {
+            result = 7502;
+            break;
+        }
+        largestWidth = std::max(largestWidth.load(), outer.right - outer.left);
+        largestHeight = std::max(largestHeight.load(), outer.bottom - outer.top);
+        if (window != gameWindow) {
+            // The game's procedure is in place before the window can call this one.
+            originalWindowProc = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC));
+            if (!originalWindowProc ||
+                !SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(windowProc))) {
+                result = 7503;
+                break;
+            }
+            gameWindow = window;
+        }
+        RECT now{};
+        GetWindowRect(window, &now);
+        if (!SetWindowPos(window, nullptr, now.left, now.top, outer.right - outer.left, outer.bottom - outer.top,
+                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS))
+            result = 7504;
+    } while (false);
+    ReleaseSRWLockExclusive(&lifecycle);
+    return result;
+}
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH)
         DisableThreadLibraryCalls(instance);

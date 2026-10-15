@@ -37,6 +37,24 @@ NAMES = ('Fullscreen', 'ExclusiveFullscreen', 'WindowMaximized', 'WindowLeft', '
 # quarters of the desktop's height.
 HEIGHT = 1080
 ASPECT = 16/9
+# The rows the window grows to once the game has it, past the desktop's height (vr_launcher's
+# enlarge_window): the HUD panel's own pixels. 1620 rows put about 27 HUD pixels in a degree, a third
+# more than a Quest 3's eye; hud.ini in Spidy's folder (`altura = 2160`) chooses 720 to 2160.
+HUD_HEIGHT = 1620
+
+
+def hud_height(folder=None):
+    """HUD_HEIGHT, or hud.ini's `altura` (or `height`) in Spidy's folder."""
+    path = pathlib.Path(folder or pathlib.Path(__file__).resolve().parents[1]) / 'hud.ini'
+    try:
+        lines = path.read_text(encoding='utf-8-sig').splitlines()
+    except OSError:
+        return HUD_HEIGHT
+    for line in lines:
+        key, _, value = line.partition('=')
+        if key.strip().lower() in ('altura', 'height') and value.strip().isdigit():
+            return min(max(int(value.strip()), 720), 2160)
+    return HUD_HEIGHT
 # What every VR session changes, whatever its window: (key, values, create). A value the game never
 # saved is created only where `create` is set, and deleted again afterwards.
 # - Frame generation (DLSS or FSR) off: Spidy draws the eyes itself, and generated frames change how
