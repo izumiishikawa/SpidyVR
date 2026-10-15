@@ -102,6 +102,16 @@ struct SwingConfig {
     // player out of the world - are gone from walls. allowMounts switches it
     // off where the game crawls the player through a vent.
     bool mountFromGround = true;
+    // Walls on the jump button only (on in the game, game_swing::gameConfig):
+    // nothing takes a wall by itself - not a body that flies or swings into
+    // one, nor one the stick pushes or walks at one. A jump pressed with a
+    // wall within wallGrabReach takes the nearest: in the air at once, from
+    // the ground by the mount's jump. On the wall a jump leaves it, as ever.
+    // A swing that stuck the player to every wall it brushed got in the way
+    // (the player, October 15: 15 walls in a session, all in the air, 9 of
+    // them mid-swing).
+    bool wallsOnJump = false;
+    float wallGrabReach = 2;
     // Physical webs: a web is a rope (the VR settings' PHYSICAL WEBS).
     // - It bends round the edge that comes between the body and its end
     //   instead of letting go there, round maxBends edges at most, and lies

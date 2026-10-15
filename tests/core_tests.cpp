@@ -1571,6 +1571,56 @@ int main() {
         body=fly(late,w,{{4.5f,1.2f,0},{0,11,0},false},in,1);
         check(late.wall().on&&length(body.velocity)<.05f,"the jump did not end on its wall");
     });
+    test("walls on the jump button: flown or pushed at, none takes the body; a jump beside one does", [] {
+        // The wall x = 5 faces -x.
+        Building w;SwingConfig c=walled();c.wallsOnJump=true;Swing s(c);Input in;
+        const auto took=[&]{bool on{};for(const auto& e:s.events())on|=e.kind==EventKind::WallOn;return on;};
+        Body body{{4,10,0},{3,0,0},false};
+        for(int i=0;i<6;++i){
+            const auto intent=s.predictNativeStep(1.f/60,in,w,body);body={intent.target,intent.velocity,false};
+            check(!took()&&!s.wall().on,"a wall took a body that flew into it");
+        }
+        in.move={1,0,0};
+        for(int i=0;i<6;++i){
+            const auto intent=s.predictNativeStep(1.f/60,in,w,{{4,10,0},{0,0,0},false});(void)intent;
+            check(!took()&&!s.wall().on,"a wall took a body the stick pushed at it");
+        }
+        in.move={};
+        // Too far for a grab: the jump does nothing.
+        in.jump=true;s.predictNativeStep(1.f/60,in,w,{{2.5f,10,0},{},false});
+        check(!s.wall().on,"a wall 2.5 m off took the body");
+        in.jump=false;s.predictNativeStep(1.f/60,in,w,{{2.5f,10,0},{},false});
+        // Beside it: the press takes it, and is no jump off it.
+        in.jump=true;auto intent=s.predictNativeStep(1.f/60,in,w,{{4,10,0},{1,0,0},false});
+        bool jumped{};for(const auto& e:s.events())jumped|=e.kind==EventKind::WallJump;
+        check(took()&&s.wall().on&&!jumped,"the jump beside the wall did not take it");
+        near(s.wall().normal.x,-1);
+        // Held, the button does nothing more; pressed again, the body jumps off.
+        body=fly(s,w,{intent.target,intent.velocity,false},in,.3f);
+        check(s.wall().on,"a held button let go of the wall");
+        in.jump=false;body=fly(s,w,body,in,.1f);
+        in.jump=true;intent=s.predictNativeStep(1.f/60,in,w,body);
+        jumped=false;for(const auto& e:s.events())jumped|=e.kind==EventKind::WallJump;
+        check(jumped&&!s.wall().on,"the second press did not jump off the wall");
+    });
+    test("walls on the jump button: walked at a wall nothing mounts; a jump beside it does", [] {
+        Building w;SwingConfig c=mounted();c.wallsOnJump=true;Swing s(c);Input in;
+        const Body stands{{4.5f,1,0},{},true};
+        in.move={1,0,0};
+        for(int i=0;i<30;++i){
+            s.predictNativeStep(1.f/60,in,w,stands);
+            check(!s.mountBegun(),"walking at the wall began a mount");
+        }
+        in.jump=true;s.predictNativeStep(1.f/60,in,w,stands);
+        check(s.mounting(),"the jump beside the wall did not mount it");
+        // The game's jump lifts the body (the button still held): the wall takes it.
+        s.predictNativeStep(1.f/60,in,w,{{4.5f,1.2f,0},{0,11,0},false});
+        check(s.wall().on,"the wall did not take the jumping body");
+        // A jump with no wall near stays a jump.
+        Swing open(c);in.jump=false;open.predictNativeStep(1.f/60,in,w,{{0,1,0},{},true});
+        in.jump=true;open.predictNativeStep(1.f/60,in,w,{{0,1,0},{},true});
+        check(!open.mounting()&&!open.mountBegun(),"a jump in the open mounted something");
+    });
     test("a stroll past a wall, a glance at it, a kerb and a far wall mount nothing", [] {
         Building w;Input in;
         const Body stands{{4.5f,1,0},{},true};

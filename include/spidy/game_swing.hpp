@@ -42,6 +42,12 @@ inline SwingConfig physicsConfig(const Config& c) {
     physics.groundClearance = 1.4f;
     return physics;
 }
+// The game's swing as played: walls on the jump button only (SwingConfig::wallsOnJump).
+inline SwingConfig gameConfig(const Config& c) {
+    SwingConfig physics = physicsConfig(c);
+    physics.wallsOnJump = true;
+    return physics;
+}
 // MoverStandard applies a velocity command during the physics step after the
 // one Spidy observes: the observed position starts the step already in flight,
 // and the observed velocity is the command before last. Steering from those

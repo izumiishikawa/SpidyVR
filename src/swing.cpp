@@ -69,6 +69,8 @@ Swing::Swing(SwingConfig c) : config_(c) {
     if (!std::isfinite(c.mountReach) || c.mountReach < 0 || c.mountReach > 10 || !(c.mountSeconds >= 0) ||
         !(c.mountHold >= 0) || !std::isfinite(c.mountHeight))
         throw std::invalid_argument("Invalid wall mount");
+    if (!std::isfinite(c.wallGrabReach) || c.wallGrabReach < .5f || c.wallGrabReach > 10)
+        throw std::invalid_argument("Invalid wall grab reach");
     if (!std::isfinite(c.handHeight) || c.bendRope > c.minRope || c.strandReach > 1)
         throw std::invalid_argument("Invalid physical web");
     if (c.groundClearance > 0 && !(c.groundTurn > 0))
@@ -295,6 +297,23 @@ void Swing::senseWall(float dt, const Input& in, const WorldQueries& world) {
             return {};
         return hit;
     };
+    // The nearest wall within `reach` of the body, level all round (wallsOnJump).
+    const auto nearestWall = [&](float reach) -> std::optional<RayHit> {
+        std::optional<RayHit> best;
+        float nearest{};
+        for (int i = 0; i < 16; ++i) {
+            const float angle = static_cast<float>(i) * 3.14159265f / 8;
+            const auto hit = wallAlong(at, {std::cos(angle), 0, std::sin(angle)}, reach);
+            if (!hit)
+                continue;
+            const float distance = dot(at - hit->point, hit->normal);
+            if (distance > -.05f && (!best || distance < nearest)) {
+                best = hit;
+                nearest = distance;
+            }
+        }
+        return best;
+    };
     if (offered) {
         if (!body_.grounded)
             mountLeft_ = config_.mountHold;
@@ -321,6 +340,21 @@ void Swing::senseWall(float dt, const Input& in, const WorldQueries& world) {
             mount_ = 0;
             mounting_ = finite(in.move) && length(in.move) >= .35f;
             mountLeft_ = mounting_ ? config_.mountHold : std::max(0.f, mountLeft_ - dt);
+            return;
+        }
+        if (config_.wallsOnJump) {
+            // A jump pressed beside a wall mounts it (the game's jump, then the
+            // wall); walking at one does not.
+            mount_ = 0;
+            if (jumpQueued_)
+                if (const auto wall = nearestWall(config_.wallGrabReach)) {
+                    mountWall_ = *wall;
+                    mountLeft_ = config_.mountHold;
+                    mountOffered_ = false;
+                    mounting_ = true;
+                    return;
+                }
+            mountLeft_ = std::max(0.f, mountLeft_ - dt);
             return;
         }
         auto wall = walkedAt(.7f);
@@ -476,6 +510,16 @@ void Swing::senseWall(float dt, const Input& in, const WorldQueries& world) {
     }
     if (sinceWallJump_ < config_.wallJumpPause)
         return;
+    if (config_.wallsOnJump) {
+        // Only a jump takes a wall in the air: the press is the grab, not a
+        // jump off the wall it takes (step's).
+        if (jumpQueued_)
+            if (const auto wall = nearestWall(config_.wallGrabReach)) {
+                jumpQueued_ = false;
+                joinWall(*wall);
+            }
+        return;
+    }
     // Ahead of the body and to both its sides: a wall it meets head on, and
     // one it grazes.
     const Vec3 level{body_.velocity.x, 0, body_.velocity.z};
