@@ -112,6 +112,20 @@ struct SwingConfig {
     // them mid-swing).
     bool wallsOnJump = false;
     float wallGrabReach = 2;
+    // Climbing with the hands (on in the game, game_swing::gameConfig). A web
+    // button pressed with the hand within climbReach of a surface takes hold
+    // of it there instead of shooting a web: the hand stays where it took
+    // hold, and the body hangs from it. While a hand holds, the body goes
+    // where the hands carry it (the hand pulled down lifts it, hand over hand
+    // up a wall, as a climbing game's), at climbMaxSpeed at most, never
+    // nearer the held surface than climbClearance, and with no gravity. Let go
+    // of with both hands, the body flies on at its hands' last speed times
+    // climbFling (climbMaxFling at most); a jump while it holds pushes it off
+    // the surface, climbJumpOut out and climbJumpUp up. No floor under the
+    // body is taken, nor a surface a hand finds below its feet.
+    bool handClimb = false;
+    float climbReach = .2f, climbClearance = .45f, climbMaxSpeed = 8;
+    float climbFling = 1.2f, climbMaxFling = 10, climbJumpOut = 5, climbJumpUp = 4;
     // Physical webs: a web is a rope (the VR settings' PHYSICAL WEBS).
     // - It bends round the edge that comes between the body and its end
     //   instead of letting go there, round maxBends edges at most, and lies
@@ -267,6 +281,8 @@ enum class EventKind {
     Unwrap,   // it came off its last one
     Leap,     // a charged leap left the ground; strength: its charge
     Join,     // a hand took hold of the other hand's web
+    ClimbOn,  // a hand took hold of a surface (SwingConfig::handClimb)
+    ClimbOff, // a hand let go of its surface; strength: the body's fling, 0 to 1
 };
 struct Event {
     EventKind kind;
@@ -336,6 +352,17 @@ class Swing {
     // held off. The swing still holds the body: it does not leave the wall.
     void pressWalls(bool on) {
         press_ = on;
+    }
+    // A hand holds a surface (SwingConfig::handClimb): this one, or either.
+    bool climbing(int hand) const {
+        return hands_[hand].climbing;
+    }
+    bool climbing() const {
+        return hands_[0].climbing || hands_[1].climbing;
+    }
+    // Where hand `hand` holds its surface (meaningful while climbing(hand)).
+    Vec3 climbPoint(int hand) const {
+        return hands_[hand].climbPoint;
     }
     bool pressingWalls() const {
         return press_;
@@ -461,7 +488,17 @@ class Swing {
         // The slack this hand made reaching toward its web's end, which a
         // taut web keeps (SwingConfig::taut).
         float slack{};
+        // Climbing (SwingConfig::handClimb): the hand holds a surface. Where it
+        // took hold (the point, the surface's normal out of it), and the body
+        // and the hand's reach from it then: the body goes where keeps the
+        // hand there. The reach moves no faster than a hand (a snap turn).
+        bool climbing{};
+        Vec3 climbPoint{}, climbNormal{}, climbBody{}, climbReach{}, climbHand{};
     };
+    // The surface a hand reaching `reach` from the body could take hold of now.
+    std::optional<RayHit> climbHold(Vec3 reach, const WorldQueries&) const;
+    // Lets go of hand `i`'s surface; the last hand to let go flings the body.
+    void letGoClimb(int i);
     void inputs(float dt, const Input&, const WorldQueries&);
     void step(float dt, const Input&, const WorldQueries&, const World* collision);
     void move(Vec3 target, const World* collision);
@@ -506,6 +543,8 @@ class Swing {
     float sinceZip_ = 100, sinceLanding_ = 100, zipSpeed_{};
     Vec3 zipDirection_{};
     bool jumpHeld_{}, jumpQueued_{};
+    // How fast the climbing hands carried the body lately (the fling's speed).
+    Vec3 climbVelocity_{};
     // A leap's charge waiting for the next step, and whether one is held out.
     float leapQueued_{};
     bool leapHeld_{};

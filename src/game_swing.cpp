@@ -193,7 +193,7 @@ void previewAims(const Command& c, const Input& in, const Body& player, const Wo
     Aim hands[2]{};
     for (unsigned i = 0; i < 2; ++i) {
         const auto& h = in.hands[i];
-        if (!h.tracked || solver.webs()[i].attached || game_grab::holds(i))
+        if (!h.tracked || solver.webs()[i].attached || solver.climbing(static_cast<int>(i)) || game_grab::holds(i))
             continue;
         auto& aim = hands[i];
         if (solver.onStrand(static_cast<int>(i))) {
@@ -502,7 +502,9 @@ void visit(const native_rays::QueryContext& world) {
         cancel();
         return;
     }
-    const bool attached = solver.webs()[0].attached || solver.webs()[1].attached;
+    // Hands that hold a surface (Swing::climbing) hold the body as a web does:
+    // a pull up off the ground is the game's jump, then the swing's.
+    const bool attached = solver.webs()[0].attached || solver.webs()[1].attached || solver.climbing();
     bool pointLaunched{}, newAttachment{}, zipped{};
     for (const auto& event : solver.events()) {
         // A charged leap leaves the ground as a point launch does: by the
@@ -759,7 +761,9 @@ void visit(const native_rays::QueryContext& world) {
         d.misses += event.kind == EventKind::Miss;
         d.obstructed += event.kind == EventKind::Obstructed;
         d.trackingLost += event.kind == EventKind::TrackingLost;
+        d.climbs += event.kind == EventKind::ClimbOn;
     }
+    d.climbing = (solver.climbing(0) ? 1u : 0u) | (solver.climbing(1) ? 2u : 0u);
     for (unsigned i = 0; i < 2; ++i) {
         const auto& w = solver.webs()[i];
         d.webs[i] = {!w.attached ? 0u : 1u | (solver.shared() ? 2u : 0u) | (w.taken ? 4u : 0u),

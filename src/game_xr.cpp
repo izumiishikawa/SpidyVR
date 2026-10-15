@@ -807,7 +807,7 @@ DWORD WINAPI run(void*) {
         uint64_t zipBefore{};
         // Walls the swing took the player onto, and jumps off them, by the
         // previous frame.
-        uint32_t wallsBefore{}, wallJumpsBefore{};
+        uint32_t wallsBefore{}, wallJumpsBefore{}, climbingBefore{};
         // Punches each hand had landed by the previous frame.
         bool punchStarted{};
         uint64_t punchesBefore[2]{};
@@ -1764,6 +1764,13 @@ DWORD WINAPI run(void*) {
                         }
                         wallsBefore = swingState.walls;
                         wallJumpsBefore = swingState.wallJumps;
+                        // A hand that takes hold of a surface feels it firmly,
+                        // and lightly as it lets go.
+                        const uint32_t climbing = input.focused && swingState.status ? swingState.climbing : 0u;
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (const bool now = climbing & (1u << i); now != ((climbingBefore >> i) & 1u))
+                                runtime.haptic(i, now ? .7f : .2f);
+                        climbingBefore = climbing;
                         // Every landed blow, a fist's or a web strike's: the hand
                         // that threw it kicks, as hard and as long as the blow was
                         // (a jab 60 ms, a blow that sends him flying 180 ms and the

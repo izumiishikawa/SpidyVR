@@ -18,10 +18,10 @@ from probe_native_rays import snapshot as ray_snapshot, command as ray_command
 
 def snapshot(game, address):
     for _ in range(8):
-        raw = game.read(address, 272)
-        if len(raw) != 272:
+        raw = game.read(address, 280)
+        if len(raw) != 280:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53574441, 4, 272):
+        if struct.unpack_from('<3I', raw) != (0x53574441, 5, 280):
             raise RuntimeError('Native swing protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
@@ -43,6 +43,8 @@ def snapshot(game, address):
         result['wall_normal'] = struct.unpack_from('<3f', raw, 244)
         result['wall_distance'] = struct.unpack_from('<f', raw, 256)[0]
         result['walls'], result['wall_jumps'], result['mount'] = struct.unpack_from('<3I', raw, 260)
+        # Version 5: the hands that hold a surface (bits) and the holds taken.
+        result['climbing'], result['climbs'] = struct.unpack_from('<2I', raw, 272)
         return result
     return None
 

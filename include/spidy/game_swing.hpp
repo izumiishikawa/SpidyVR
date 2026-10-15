@@ -42,10 +42,12 @@ inline SwingConfig physicsConfig(const Config& c) {
     physics.groundClearance = 1.4f;
     return physics;
 }
-// The game's swing as played: walls on the jump button only (SwingConfig::wallsOnJump).
+// The game's swing as played: walls on the jump button only (SwingConfig::wallsOnJump),
+// and climbing with the hands (SwingConfig::handClimb).
 inline SwingConfig gameConfig(const Config& c) {
     SwingConfig physics = physicsConfig(c);
     physics.wallsOnJump = true;
+    physics.handClimb = true;
     return physics;
 }
 // MoverStandard applies a velocity command during the physics step after the
@@ -160,7 +162,7 @@ enum class Surface : uint32_t {
     floor, // the game's crawl on a floor: a vent or a duct, too low to stand in
 };
 struct Data {
-    uint32_t magic = 0x53574441, version = 4, bytes = sizeof(Data), status{};
+    uint32_t magic = 0x53574441, version = 5, bytes = sizeof(Data), status{};
     int64_t sequence{};
     uint64_t qpc{}, steps{}, controlled{}, serial{}, attaches{}, releases{}, zips{}, world{}, sourceStep{};
     Vec3 position{}, velocity{}, requested{};
@@ -182,6 +184,9 @@ struct Data {
     Vec3 wallNormal{};
     float wallDistance{};
     uint32_t walls{}, wallJumps{}, mount{};
+    // Version 5: the hands that hold a surface now (bit 0 the left, bit 1 the
+    // right; Swing::climbing), and the holds taken so far.
+    uint32_t climbing{}, climbs{};
 };
 static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 200 &&
               offsetof(Command, tilt) == commandBytesV2 && offsetof(Command, leap) == commandBytesV3);
@@ -266,7 +271,7 @@ inline Bends::Hand edgesOf(const Web& w) {
 constexpr float motionSpeedLimit = 65;
 // The most gravity a swing takes, m/s^2: every weight the VR settings offer.
 constexpr float maxGravity = 30;
-static_assert(sizeof(WebState) == 28 && sizeof(Data) == 272 && offsetof(Data, wall) == 240);
+static_assert(sizeof(WebState) == 28 && sizeof(Data) == 280 && offsetof(Data, wall) == 240 && offsetof(Data, climbing) == 272);
 // The player is in the air: Spidy's own flight, or the game's jump or fall,
 // where the mover is unsupported and in its airborne mode (collision flags
 // 0x10: the steps the game's air state runs). A perch, a wall crawl and a

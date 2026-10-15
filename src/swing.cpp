@@ -71,6 +71,10 @@ Swing::Swing(SwingConfig c) : config_(c) {
         throw std::invalid_argument("Invalid wall mount");
     if (!std::isfinite(c.wallGrabReach) || c.wallGrabReach < .5f || c.wallGrabReach > 10)
         throw std::invalid_argument("Invalid wall grab reach");
+    for (float v : {c.climbReach, c.climbClearance, c.climbMaxSpeed, c.climbFling, c.climbMaxFling, c.climbJumpOut,
+                    c.climbJumpUp})
+        if (!std::isfinite(v) || v < 0 || v > 100)
+            throw std::invalid_argument("Invalid climb");
     if (!std::isfinite(c.handHeight) || c.bendRope > c.minRope || c.strandReach > 1)
         throw std::invalid_argument("Invalid physical web");
     if (c.groundClearance > 0 && !(c.groundTurn > 0))
@@ -264,6 +268,13 @@ void Swing::senseWall(float dt, const Input& in, const WorldQueries& world) {
     backLeft_ = std::max(0.f, backLeft_ - dt);
     const bool offered = offered_;
     offered_ = mounting_ = false;
+    // The hands hold the body: no wall of the swing's meanwhile, and a jump is
+    // the push off the climb's surface (step).
+    if (climbing()) {
+        leaveWall();
+        mount_ = mountLeft_ = 0;
+        return;
+    }
     if (!config_.walls) {
         leaveWall();
         crest_ = mount_ = mountLeft_ = 0;
@@ -758,6 +769,7 @@ WebShot Swing::shot(Pose aim, Vec3 from, const WorldQueries& world) const {
 }
 void Swing::releaseAll() {
     for (int i = 0; i < 2; ++i) {
+        letGoClimb(i);
         release(i);
         hands_[i].sample = false;
         hands_[i].held = true; // a grip already held is not a new shot
@@ -767,6 +779,48 @@ void Swing::releaseAll() {
     sinceZip_ = sinceLanding_ = 100;
     zipSpeed_ = 0;
     zipDirection_ = {};
+}
+std::optional<RayHit> Swing::climbHold(Vec3 reach, const WorldQueries& world) const {
+    const Vec3 hand = body_.position + reach;
+    if (!finite(hand))
+        return {};
+    std::optional<RayHit> best;
+    float nearest = config_.climbReach;
+    // `gap`: how far the hand is out of the surface the ray met (0: at it, or in it).
+    const auto consider = [&](const std::optional<RayHit>& hit, float gap) {
+        if (!hit || !hit->fixed || !finite(hit->point) || !finite(hit->normal) || !(gap <= nearest))
+            return;
+        const Vec3 n = normalized(hit->normal);
+        // Nothing below the feet, nor a floor under the body's centre.
+        if (length(n) < .5f || hit->point.y < body_.position.y - 1 || (n.y > .7f && hit->point.y < body_.position.y))
+            return;
+        best = RayHit{hit->point, n, hit->surface, true};
+        nearest = gap;
+    };
+    // From the body out through the hand: a hand at a surface, or pushed into it.
+    if (const float span = length(reach); span > .05f) {
+        const auto hit = world.raycast(body_.position, reach / span, span + config_.climbReach);
+        if (hit)
+            consider(hit, std::max(0.f, length(hit->point - body_.position) - span));
+    }
+    // Round the hand: a surface beside it.
+    for (const Vec3 way : {Vec3{1, 0, 0}, Vec3{-1, 0, 0}, Vec3{0, 0, 1}, Vec3{0, 0, -1}, Vec3{0, 1, 0}, Vec3{0, -1, 0}})
+        if (const auto hit = world.raycast(hand, way, std::max(config_.climbReach, .02f)))
+            consider(hit, length(hit->point - hand));
+    return best;
+}
+void Swing::letGoClimb(int i) {
+    auto& s = hands_[i];
+    if (!s.climbing)
+        return;
+    s.climbing = false;
+    float fling{};
+    // The last hand to let go: the body flies on as the hands carried it.
+    if (!climbing() && !body_.grounded) {
+        body_.velocity = limited(climbVelocity_ * config_.climbFling, config_.climbMaxFling);
+        fling = config_.climbMaxFling > 0 ? length(body_.velocity) / config_.climbMaxFling : 0.f;
+    }
+    events_.push_back({EventKind::ClimbOff, i, fling});
 }
 void Swing::inputs(float dt, const Input& in, const WorldQueries& world) {
     jumpQueued_ |= in.jump && !jumpHeld_;
@@ -783,6 +837,7 @@ void Swing::inputs(float dt, const Input& in, const WorldQueries& world) {
                            std::isfinite(in.trackingYaw) && std::isfinite(h.trigger) && std::isfinite(h.grip);
         const Vec3 forward = h.aim.orientation.rotate({0, 0, -1});
         if (!valid || !finite(forward) || length(forward) < .9f || length(forward) > 1.1f) {
+            letGoClimb(i);
             release(i, EventKind::TrackingLost);
             s.sample = false;
             s.held = true; // require a full release before the next shot
@@ -798,6 +853,15 @@ void Swing::inputs(float dt, const Input& in, const WorldQueries& world) {
         // hands: a press takes hold of that web.
         const bool onOther = onStrand(i);
         s.reach = offset;
+        if (s.climbing) {
+            if (s.sample) {
+                s.climbHand += limited(s.reach - s.climbHand, config_.maxHandSpeed * std::max(dt, 1e-3f));
+            } else {
+                // After a gap in input the hand holds where it is now.
+                s.climbBody = body_.position;
+                s.climbReach = s.climbHand = s.reach;
+            }
+        }
         if (config_.physical) {
             const float over = std::max({dt, stepSeconds_, 1e-3f});
             if (s.sample) {
@@ -819,10 +883,27 @@ void Swing::inputs(float dt, const Input& in, const WorldQueries& world) {
         }
         // Squeezing the grip shoots this hand's web; holding it keeps the web.
         const bool held = s.held ? h.grip > .35f : h.grip > .65f;
-        const bool shoot = held && !s.held;
+        bool shoot = held && !s.held;
         s.held = held;
         if (w.attached && (!held || (!w.airAnchor && !world.exists(w.surface))))
             release(i);
+        // Climbing: let go of, the button lets go of the surface; pressed with
+        // the hand at one, it takes hold there instead of shooting a web.
+        if (s.climbing && !held)
+            letGoClimb(i);
+        if (config_.handClimb && shoot && !w.attached && !s.climbing)
+            if (const auto surface = climbHold(s.reach, world)) {
+                if (!climbing())
+                    climbVelocity_ = {};
+                s.climbing = true;
+                s.climbPoint = surface->point;
+                s.climbNormal = surface->normal;
+                s.climbBody = body_.position;
+                s.climbReach = s.climbHand = s.reach;
+                leaveWall();
+                events_.push_back({EventKind::ClimbOn, i, .5f});
+                shoot = false;
+            }
         if (!w.attached && shoot && onOther && webs_[1 - i].attached) {
             // One web in both hands. This hand holds it where it is, as slack
             // there as the web is at the hand that had it; and a web zips
@@ -925,6 +1006,54 @@ void Swing::move(Vec3 target, const World* collision) {
 void Swing::step(float dt, const Input& in, const WorldQueries& world, const World* collision) {
     sinceZip_ += dt;
     sinceLanding_ += dt;
+    if (climbing()) {
+        if (jumpQueued_) {
+            // Off the surface: out of it and up, on top of what the hands gave.
+            Vec3 out{};
+            for (const auto& s : hands_)
+                if (s.climbing)
+                    out += s.climbNormal;
+            out = normalized(Vec3{out.x, 0, out.z});
+            const Vec3 carried = climbVelocity_;
+            for (int i = 0; i < 2; ++i)
+                if (hands_[i].climbing) {
+                    hands_[i].climbing = false;
+                    events_.push_back({EventKind::ClimbOff, i, 0});
+                }
+            body_.velocity = limited(carried + (finite(out) ? out * config_.climbJumpOut : Vec3{}) +
+                                         Vec3{0, config_.climbJumpUp, 0},
+                                     config_.maxSpeed);
+            body_.grounded = false;
+            jumpQueued_ = false;
+            sinceWallJump_ = 0;
+            events_.push_back({EventKind::WallJump, -1, 1});
+        } else {
+            // Where each holding hand keeps its hold, never nearer its surface
+            // than the clearance; with two, between them.
+            Vec3 sum{};
+            int holding{};
+            for (const auto& s : hands_) {
+                if (!s.climbing)
+                    continue;
+                Vec3 target = s.climbBody + s.climbReach - s.climbHand;
+                if (const float out = dot(target - s.climbPoint, s.climbNormal); out < config_.climbClearance)
+                    target += s.climbNormal * (config_.climbClearance - out);
+                sum += target;
+                ++holding;
+            }
+            const Vec3 velocity = limited((sum / static_cast<float>(holding) - body_.position) / dt,
+                                          config_.climbMaxSpeed);
+            climbVelocity_ += (velocity - climbVelocity_) * (1 - std::exp(-dt / .08f));
+            body_.velocity = velocity;
+            move(body_.position + velocity * dt, collision);
+            if (velocity.y > .1f)
+                body_.grounded = false;
+            leapQueued_ = 0;
+            for (auto& web : webs_)
+                web.tension = 0;
+            return;
+        }
+    }
     const bool wasGrounded = body_.grounded;
     if (leapQueued_ > 0) {
         // A charged leap: up, and along the stick. From the ground only.

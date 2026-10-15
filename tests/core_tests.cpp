@@ -1603,6 +1603,94 @@ int main() {
         jumped=false;for(const auto& e:s.events())jumped|=e.kind==EventKind::WallJump;
         check(jumped&&!s.wall().on,"the second press did not jump off the wall");
     });
+    // Climbing: the wall x = 5 faces -x. A hand `reach` from the body's centre
+    // (gripRelativeToHead turns into it with handHeight, 0.6 m, added).
+    const auto climber=[]{SwingConfig c=walled();c.wallsOnJump=true;c.handClimb=true;return c;};
+    const auto handAt=[](Input& in,int hand,Vec3 reach,float grip){
+        in.hands[hand]={{{0,0,0},{}},reach-Vec3{0,.6f,0},true,0,grip};
+    };
+    const auto climbFor=[](Swing& s,const WorldQueries& w,Body body,Input& in,float seconds,Vec3 handWay={}){
+        const float dt=1.f/60;
+        for(float t=0;t<seconds-dt/2;t+=dt){
+            for(auto& h:in.hands)if(h.tracked)h.gripRelativeToHead+=handWay*dt;
+            const auto intent=s.predictNativeStep(dt,in,w,body,dt);
+            check(intent.valid,"prediction rejected");
+            body={intent.target,intent.velocity,false};
+        }
+        return body;
+    };
+    test("climbing: a hand at a wall takes hold, and the body hangs from it and climbs hand over hand", [&] {
+        Building w;Swing s(climber());Input in;
+        Body body{{4.2f,10,0},{},false};
+        handAt(in,0,{.75f,.3f,0},0);body=climbFor(s,w,body,in,.05f);
+        in.hands[0].grip=1;
+        auto intent=s.predictNativeStep(1.f/60,in,w,body,1.f/60);
+        bool took{};for(const auto& e:s.events())took|=e.kind==EventKind::ClimbOn;
+        check(took&&s.climbing(0)&&!s.webs()[0].attached,"the hand at the wall did not take hold of it");
+        body={intent.target,intent.velocity,false};
+        // Held, the body hangs where it is: no gravity.
+        body=climbFor(s,w,body,in,1);
+        near(body.position.y,10,.02f);near(body.position.x,4.2f,.02f);
+        // The hand pulled down 0.4 m lifts the body 0.4 m.
+        body=climbFor(s,w,body,in,.5f,{0,-.8f,0});
+        near(body.position.y,10.4f,.03f);
+        // The other hand takes hold higher up; the first lets go: the body still hangs.
+        handAt(in,1,{.75f,.7f,0},0);body=climbFor(s,w,body,in,.05f);
+        in.hands[1].grip=1;body=climbFor(s,w,body,in,.05f);
+        check(s.climbing(1),"the second hand did not take hold");
+        in.hands[0].grip=0;body=climbFor(s,w,body,in,.05f);
+        check(!s.climbing(0)&&s.climbing(1),"the first hand did not let go alone");
+        const float before=body.position.y;
+        body=climbFor(s,w,body,in,.5f);
+        near(body.position.y,before,.02f);
+        // That hand pulled down too: up again.
+        body=climbFor(s,w,body,in,.5f,{0,-.8f,0});
+        near(body.position.y,before+.4f,.03f);
+    });
+    test("climbing: the body never goes into the held wall, and a jump pushes it off", [&] {
+        Building w;Swing s(climber());Input in;
+        Body body{{4.2f,10,0},{},false};
+        handAt(in,0,{.75f,.3f,0},1);body=climbFor(s,w,body,in,.1f);
+        check(s.climbing(0),"no hold");
+        // The hand drawn back to the body would put the body in the wall.
+        body=climbFor(s,w,body,in,1,{-.75f,0,0});
+        check(body.position.x<=5-SwingConfig{}.climbClearance+.01f,"the body went into the wall");
+        in.jump=true;
+        const auto jump=s.predictNativeStep(1.f/60,in,w,body,1.f/60);
+        bool off{};for(const auto& e:s.events())off|=e.kind==EventKind::ClimbOff;
+        check(off&&!s.climbing(),"the jump did not let go");
+        check(jump.velocity.x<-3&&jump.velocity.y>2,"the jump did not push off out and up");
+    });
+    test("climbing: let go of as the hands pull, the body flies on; a hand in the open shoots its web", [&] {
+        Building w;Swing s(climber());Input in;
+        Body body{{4.2f,10,0},{},false};
+        handAt(in,0,{.75f,.3f,0},1);body=climbFor(s,w,body,in,.1f);
+        body=climbFor(s,w,body,in,.25f,{0,-3,0});
+        in.hands[0].grip=0;
+        const auto intent=s.predictNativeStep(1.f/60,in,w,body,1.f/60);
+        bool flung{};for(const auto& e:s.events())flung|=e.kind==EventKind::ClimbOff&&e.strength>.2f;
+        check(flung&&intent.velocity.y>2.5f,"letting go mid-pull did not fling the body up");
+        // Away from every surface the press is a web: aimed at the wall 4 m off.
+        Swing open(climber());Input aim;
+        aim.hands[0]={{{1,10,0},Quat::yaw(-3.14159265f/2)},{0,-.3f,0},true,0,0};
+        open.predictNativeStep(1.f/60,aim,w,{{1,10,0},{},false},1.f/60);
+        aim.hands[0].grip=1;
+        open.predictNativeStep(1.f/60,aim,w,{{1,10,0},{},false},1.f/60);
+        check(!open.climbing()&&open.webs()[0].attached,"a hand in the open did not shoot its web");
+    });
+    test("climbing: the ground under the body is never held", [&] {
+        struct Ground : TestWorld {
+            std::optional<RayHit> raycast(Vec3 o,Vec3 d,float distance) const override {
+                if(d.y<-1e-4f&&o.y>0&&-o.y/d.y<=distance)return RayHit{o+d*(-o.y/d.y),{0,1,0},2,true};
+                return {};
+            }
+            bool exists(std::uint64_t id) const override {return id==2;}
+        } w;
+        Swing s(climber());Input in;
+        handAt(in,0,{.2f,-.95f,0},0);s.predictNativeStep(1.f/60,in,w,{{0,1,0},{},true},1.f/60);
+        in.hands[0].grip=1;s.predictNativeStep(1.f/60,in,w,{{0,1,0},{},true},1.f/60);
+        check(!s.climbing(),"the floor was held");
+    });
     test("walls on the jump button: walked at a wall nothing mounts; a jump beside it does", [] {
         Building w;SwingConfig c=mounted();c.wallsOnJump=true;Swing s(c);Input in;
         const Body stands{{4.5f,1,0},{},true};
